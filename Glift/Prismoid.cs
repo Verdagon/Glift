@@ -175,6 +175,10 @@ namespace Glift {
             set {
                 _InitVerticesIfNull();
                 _square1.UpRight = value;
+        
+                if (float.IsNaN(_square1.UpRight.X)) {
+          throw new Exception("wat");
+        }
             }
         }
 
@@ -219,6 +223,9 @@ namespace Glift {
             set {
                 _InitVerticesIfNull();
                 _square2.UpRight = value;
+                if (float.IsNaN(_square2.UpRight.X)) {
+          throw new Exception("wat");
+        }
             }
         }
 

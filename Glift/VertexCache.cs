@@ -136,6 +136,9 @@ namespace Glift {
                     Point3 p1, p2;
                     _WrapPointsAroundAtContourEnd(
                         frontVerts, i, start, end, p0, out p1, out p2);
+                  if (p0 == p2) {
+                    throw new Exception("wat");
+                  }
 
                     frontArms.Add(new Arm(
                         new Point3Pair(p0, p1),
@@ -294,6 +297,9 @@ namespace Glift {
                         lowerPrismoid.CenterLine.P1.ToPoint2XY());
 
                 Vector2 tangentUnit = Vector2.Normalize(upperUnit + lowerUnit);
+        if (float.IsNaN(tangentUnit.X)) {
+          throw new Exception("wat");
+        }
                 Vector2 miterUnit = Vector2.Normalize(tangentUnit.Rotate90CW());
                 Vector2 normalUnit = Vector2.Normalize(upperUnit.Rotate90CW());
                 float tHalf = (float)_thickness / 2;
@@ -395,14 +401,14 @@ namespace Glift {
                 return;
 
             var prismoids = new List<Prismoid>();
-            foreach (Arm a in _frontArms) {
-                if (a.Angle.ToDegrees() >= Args.angle)
-                    continue;
-                Point3 p = a.UpperSegment.P2;
-                var pp = new Point3Pair(p, Vector3.Transform(p, _translZ));
-                var moid = new Prismoid(pp, _thickness);
-                prismoids.Add(moid);
-            }
+            //foreach (Arm a in _frontArms) {
+            //    if (a.Angle.ToDegrees() >= Args.angle)
+            //        continue;
+            //    Point3 p = a.UpperSegment.P2;
+            //    var pp = new Point3Pair(p, Vector3.Transform(p, _translZ));
+            //    var moid = new Prismoid(pp, _thickness);
+            //    prismoids.Add(moid);
+            //}
             _sideOutline = prismoids.ToArray();
         }
 

@@ -85,9 +85,9 @@ namespace Glift {
 
                 GlyphNameMap[] nameIdxs = Globals.allGlyphs ?
                     typeface.GetGlyphNameIter().ToArray() :
-                    Args.chars.Select(
+                    Args.charNames.Select(
                         c => new GlyphNameMap(
-                            typeface.LookupIndex(c), c.ToString())).ToArray();
+                            typeface.GetGlyphIndexByName(c), c.ToString())).ToArray();
 
                 return nameIdxs.Select(nameId => {
                     var builder = new GlyphPathBuilder(typeface);
@@ -98,46 +98,129 @@ namespace Glift {
                     var wrPath = new WritablePath();
                     transl.SetOutput(wrPath);
                     builder.ReadShapes(transl);
+
                     var curveFlattener = new SimpleCurveFlattener();
 
-                    int[] contourEnds;
-                    float[] flattenedPoints = curveFlattener.Flatten(
-                        wrPath._points, out contourEnds);
+                  if (Args.flattenMethod == 0) {
+                    curveFlattener.FlattenMethod = CurveFlattenMethod.Inc;
+                    curveFlattener.IncrementalStep = Args.curveStep;
+                  } else {
+                    curveFlattener.FlattenMethod = CurveFlattenMethod.Div;
+                    curveFlattener.DivCurveAngleTolerance = Args.angleTolerance;
+                  }
 
-                    return new RawGlyph {
+                  //curveFlattener.FlattenMethod = CurveFlattenMethod.Div;
+                  //curveFlattener.DivCurveAngleTolerance = 30f;
+                  //curveFlattener.DivCurveApproximationScale = 0.01;
+
+                  //curveFlattener.DivCurveRecursiveLimit = 1;
+                  //curveFlattener.DivCurveAngleTolerenceEpsilon = 1;
+
+                    float[] flattenedUncoalescedPoints = curveFlattener.Flatten(
+                        wrPath._points, out var uncoalescedContourInclusiveEnds);
+                  if (flattenedUncoalescedPoints == null) {
+                    Console.WriteLine("Failed to flatten: " + nameId.glyphName);
+                    return null;
+                  }
+
+                  var (flattenedPoints, contourInclusiveEnds) =
+                      CoalesceIdenticalNeighbors(flattenedUncoalescedPoints, uncoalescedContourInclusiveEnds);
+
+
+                  return new RawGlyph {
                         Name = nameId.glyphName,
                         GlyphPts = flattenedPoints,
-                        ContourEnds = contourEnds
-                    };
+                        ContourEnds = contourInclusiveEnds
+                  };
                 }).ToArray();
             }
         }
 
-        public static List<FaceTask> CreateFaceTasks() {
+    private static (float[], int[])
+      CoalesceIdenticalNeighbors(
+        float[] flattenedUncoalescedPoints, int[] uncoalescedContourInclusiveEnds) {
+
+      var contourPointLists = new List<float>[uncoalescedContourInclusiveEnds.Length];
+      for (int i = 0; i < uncoalescedContourInclusiveEnds.Length; i++) {
+        int contourInclusiveEnd = uncoalescedContourInclusiveEnds[i];
+        int contourExclusiveEnd = contourInclusiveEnd + 1;
+        int contourStart = 0;
+        if (i > 0) {
+          int previousContourInclusiveEnd = uncoalescedContourInclusiveEnds[i - 1];
+          int previousContourExclusiveEnd = previousContourInclusiveEnd + 1;
+          contourStart = previousContourExclusiveEnd;
+        }
+        List<float> contourPoints = new List<float>();
+        for (int j = 0; j < contourExclusiveEnd - contourStart; j += 2) {
+          float x = flattenedUncoalescedPoints[contourStart + j];
+          float y = flattenedUncoalescedPoints[contourStart + j + 1];
+
+          int nextJ = (j + 2) % (contourExclusiveEnd - contourStart);
+          float nextX = flattenedUncoalescedPoints[contourStart + nextJ];
+          float nextY = flattenedUncoalescedPoints[contourStart + nextJ + 1];
+          if (x == nextX && y == nextY) {
+            // This is equal to the next point, so skip it. We'll let the next
+            // point be added instead.
+            continue;
+          }
+
+          contourPoints.Add(x);
+          contourPoints.Add(y);
+        }
+        contourPointLists[i] = contourPoints;
+      }
+
+      // Now add the start point to the end for each one, to avoid a glift bug somewhere further
+      // down.
+      foreach (var contourPoints in contourPointLists) {
+        contourPoints.Add(contourPoints[0]);
+        contourPoints.Add(contourPoints[1]);
+      }
+
+      var contourInclusiveEnds = new List<int>();
+      var flattenedPoints = new List<float>();
+      foreach (var contourPoints in contourPointLists) {
+        int contourStart = flattenedPoints.Count;
+        flattenedPoints.AddRange(contourPoints);
+        int contourExclusiveEnd = flattenedPoints.Count;
+        int contourInclusiveEnd = contourExclusiveEnd - 1;
+        contourInclusiveEnds.Add(contourInclusiveEnd);
+      }
+
+      return (flattenedPoints.ToArray(), contourInclusiveEnds.ToArray());
+    }
+
+    public static List<FaceTask> CreateFaceTasks() {
             var faceTasks = new List<FaceTask>();
             var faceOnlies = new List<Face>();
 
-            if (Args.frontOnly)
+            if (Args.front)
                 faceOnlies.Add(Face.Front);
-            if (Args.sideOnly)
+            if (Args.sides)
                 faceOnlies.Add(Face.Side);
-            if (Args.outlineOnly)
+            if (Args.frontOutline)
                 faceOnlies.Add(Face.Outline);
 
             var d = new Dictionary<Face, string>();
             if (faceOnlies.Count > 1) {
-                d[Face.Front] = "FrontOnly";
-                d[Face.Side] = "SideOnly";
-                d[Face.Outline] = "OutlineOnly";
-            }
-            else {
-                d[Face.Front] = "";
-                d[Face.Side] = "";
-                d[Face.Outline] = "";
+              d[Face.Front] = ".front";
+              d[Face.Side] = ".sides";
+              d[Face.Outline] = ".outline.front";
+            } else if (faceOnlies.Count == 1) {
+              d[Face.Front] = "";
+              d[Face.Side] = "";
+              d[Face.Outline] = "";
+            } else {
+              d[Face.Front] = ".front";
+              d[Face.Side] = ".sides";
+              d[Face.Outline] = ".outline.front";
             }
 
-            if (faceOnlies.Count == 0)
-                faceTasks.Add(new FaceTask("", Face.All));
+            if (faceOnlies.Count == 0) {
+              faceTasks.Add(new FaceTask(d[Face.Front], Face.Front));
+              faceTasks.Add(new FaceTask(d[Face.Side], Face.Side));
+              faceTasks.Add(new FaceTask(d[Face.Outline], Face.Outline));
+            }
             else
                 foreach (Face f in faceOnlies)
                     faceTasks.Add(new FaceTask(d[f], f));
@@ -146,8 +229,24 @@ namespace Glift {
         }
 
         public static void Main(string[] args) {
-            Args.Parse(args);
-            Globals.allGlyphs = Args.chars.Count == 0;
+      Args.Parse(args);
+
+      ////Args.front = true;
+      //Args.thickness = 1;
+      //Args.sizeMult = 0.014473088888889f;
+      //Args.zdepth = 72;
+      //Args.xoffset = -34.546875503808601f;
+      //Args.yoffset = -34.546875503808601f;
+      //Args.ttfPath = "D:\\IncendianFalls\\Assets\\Fonts\\Symbols.ttf";
+      ////Args.charNames.Add("d");
+
+      ////Args.flattenMethod = 0;
+      ////Args.curveStep = 0;
+
+      //Args.flattenMethod = 1;
+      //Args.angleTolerance = 0.3f;
+
+      Globals.allGlyphs = Args.charNames.Count == 0;
             RawGlyph[] glyphs = GetRawGlyphs();
             List<FaceTask> faceTasks = CreateFaceTasks();
 
@@ -156,6 +255,9 @@ namespace Glift {
                 tee = Console.WriteLine;
 
             foreach (RawGlyph g in glyphs) {
+        if (g == null) {
+          continue;
+        }
                 if (Args.listNames) {
                     Console.WriteLine(g.Name);
                     continue;
@@ -179,8 +281,9 @@ namespace Glift {
 
                     foreach (Point3 pt in vtxCache.VerticesOfFace(task.Face))
                         tee?.Invoke($"v {pt.X} {pt.Y} {pt.Z}");
-                    foreach (
-                        Triangle3 tri in vtxCache.TrianglesOfFace(task.Face)) {
+                    var tris = vtxCache.TrianglesOfFace(task.Face);
+          Console.WriteLine(tris.Count() + " triangles");
+                    foreach (Triangle3 tri in tris) {
                         int vtxIdx1 = vtxCache.IndexOfFace(tri.P1, task.Face);
                         int vtxIdx2 = vtxCache.IndexOfFace(tri.P2, task.Face);
                         int vtxIdx3 = vtxCache.IndexOfFace(tri.P3, task.Face);
